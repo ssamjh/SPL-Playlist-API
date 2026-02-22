@@ -180,4 +180,3 @@ environment:
 
 - Files are read on every request — no caching or database
 - `file_path` values are Windows paths as written in the M3U files (e.g. `X:\Spots\file.mp3`). These are returned as-is and are informational only; the server does not attempt to access them
-- Break notes (`type=3`) are included in all responses
