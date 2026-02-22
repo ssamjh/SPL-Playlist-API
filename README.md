@@ -8,7 +8,7 @@ A lightweight Flask API that parses StationPlaylist extended M3U files and expos
 docker compose up -d
 ```
 
-Place your M3U files in `./playlists/` (or adjust the volume path in `compose.yaml`).
+Place your M3U files in `./playlists/` (or adjust the volume path in `docker-compose.yaml`).
 
 ## File naming convention
 
