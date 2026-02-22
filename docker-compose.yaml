@@ -5,4 +5,7 @@ services:
       - "5000:5000"
     volumes:
       - ./playlists:/playlists:ro
+      - ./media:/media:ro
+    environment:
+      - MEDIA_ROOT=/media
     restart: unless-stopped

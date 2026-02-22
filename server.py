@@ -6,6 +6,18 @@ from flask import Flask, jsonify, abort, request
 app = Flask(__name__)
 
 PLAYLIST_DIR = os.environ.get("PLAYLIST_DIR", "/playlists")
+MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
+
+
+def resolve_path(windows_path):
+    """Translate a Windows absolute path (e.g. G:\\Spots\\1.mp3) to a container path under MEDIA_ROOT."""
+    if not windows_path:
+        return None
+    # Strip drive letter and leading backslash (e.g. "G:\")
+    path = re.sub(r'^[A-Za-z]:\\', '', windows_path)
+    # Replace backslashes with forward slashes
+    path = path.replace('\\', '/')
+    return os.path.join(MEDIA_ROOT, path)
 
 TYPE_LABELS = {
     0: "song",
@@ -97,7 +109,7 @@ def parse_playlist(filepath):
                     break
                 j += 1
 
-            entry = {"duration": duration, "file_path": file_path}
+            entry = {"duration": duration, "file_path": file_path, "file_exists": os.path.exists(resolve_path(file_path))}
 
             # Parse pipe-delimited fields
             if info.startswith("|"):
@@ -143,6 +155,10 @@ def parse_playlist(filepath):
                     entry["segue"] = int(get(12))
                 except (ValueError, IndexError):
                     entry["segue"] = 0
+
+            if entry.get("type") == 3:
+                for key in ("file_path", "file_exists", "duration", "intro", "cue_time", "cue_overlap", "segue"):
+                    entry.pop(key, None)
 
             entries.append(entry)
 
@@ -196,6 +212,12 @@ def filter_entries(entries):
                 e for e in entries
                 if any(q_lower in e.get(f, "").lower() for f in TEXT_FIELDS)
             ]
+
+    # --- file_exists filter ---
+    file_exists_param = request.args.get("file_exists")
+    if file_exists_param is not None:
+        want = file_exists_param.lower() not in ("0", "false", "no")
+        entries = [e for e in entries if e.get("file_exists") == want]
 
     # --- sorting ---
     sort_key = request.args.get("sort")
