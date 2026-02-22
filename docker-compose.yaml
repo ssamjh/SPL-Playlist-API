@@ -1,0 +1,8 @@
+services:
+  playlistapi:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./playlists:/playlists:ro
+    restart: unless-stopped
