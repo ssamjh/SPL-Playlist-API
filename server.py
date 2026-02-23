@@ -1,6 +1,11 @@
+import base64
+import csv
 import glob
+import io
 import os
 import re
+from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
 from flask import Flask, jsonify, abort, request
 
 app = Flask(__name__)
@@ -283,6 +288,153 @@ def playlist(date, hour):
         "filename": os.path.basename(filepath),
         "date": d,
         "hour": h,
+        "entry_count": len(entries),
+        "entries": entries,
+    })
+
+
+def load_studio_configs():
+    """Discover studios from STUDIO_<NAME>_ENDPOINT environment variables."""
+    studios = {}
+    for key, value in os.environ.items():
+        if key.startswith("STUDIO_") and key.endswith("_ENDPOINT"):
+            name = key[len("STUDIO_"):-len("_ENDPOINT")].lower()
+            studios[name] = value
+    return studios
+
+
+STUDIO_CONFIGS = load_studio_configs()
+
+
+def fetch_studio_data(endpoint_url):
+    """Fetch raw CSV text from the studio SPL endpoint, handling Basic Auth in the URL."""
+    parsed = urlparse(endpoint_url)
+    username = parsed.username
+    password = parsed.password
+
+    # Rebuild URL without embedded credentials
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc += f":{parsed.port}"
+
+    query = parsed.query or ""
+    if "TrackInfo=all" not in query:
+        query = (query + "&TrackInfo=all") if query else "TrackInfo=all"
+
+    clean_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, query, parsed.fragment))
+
+    req = Request(clean_url)
+    if username is not None:
+        credentials = base64.b64encode(f"{username}:{password or ''}".encode()).decode()
+        req.add_header("Authorization", f"Basic {credentials}")
+
+    with urlopen(req, timeout=10) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def parse_studio_data(text):
+    """Parse SPL CSV output into a list of track dicts."""
+    entries = []
+    reader = csv.reader(io.StringIO(text))
+    for row in reader:
+        if len(row) < 10:
+            continue
+        try:
+            index = int(row[0])
+            track_type = int(row[1])
+        except ValueError:
+            continue
+
+        artist = row[2]
+        title = row[3]
+        album = row[4]
+        duration_ms = int(row[5]) if row[5].lstrip("-").isdigit() else 0
+        intro_ms = int(row[6]) if row[6].lstrip("-").isdigit() else -1
+        outro_ms = int(row[7]) if row[7].lstrip("-").isdigit() else -1
+        category = row[8]
+        filename = row[9]
+
+        entry = {
+            "index": index,
+            "type": track_type,
+            "type_label": TYPE_LABELS.get(track_type, "unknown"),
+        }
+
+        if artist:
+            entry["artist"] = artist
+        if title:
+            entry["title"] = title
+        if album:
+            entry["album"] = album
+
+        entry["duration"] = duration_ms / 1000.0
+
+        if intro_ms != -1:
+            entry["intro"] = intro_ms
+        if outro_ms != -1:
+            entry["outro"] = outro_ms
+
+        if category:
+            entry["category"] = category
+
+        if filename:
+            entry["filename"] = filename
+            entry["file_exists"] = os.path.exists(resolve_path(filename))
+
+        # Strip playback fields from break notes and hour markers
+        if track_type == 3:
+            for key in ("duration", "intro", "outro", "filename", "file_exists"):
+                entry.pop(key, None)
+        elif track_type == 4:
+            entry.pop("duration", None)
+
+        entries.append(entry)
+
+    return entries
+
+
+def parse_hour_from_marker(title):
+    """Extract hour (int) from an Hour Marker title like '1200 (12pm 23/02/2026)'."""
+    m = re.match(r'^(\d{2})\d{2}', title.strip())
+    return int(m.group(1)) if m else None
+
+
+def assign_hours(entries):
+    """Tag each entry with the hour it falls under, based on Hour Marker entries."""
+    current_hour = None
+    for entry in entries:
+        if entry.get("category") == "Hour Marker":
+            current_hour = parse_hour_from_marker(entry.get("title", ""))
+        entry["hour"] = current_hour
+    return entries
+
+
+@app.route("/studio/<studio_name>")
+def studio(studio_name):
+    config = STUDIO_CONFIGS.get(studio_name.lower())
+    if config is None:
+        abort(404, description=f"Studio '{studio_name}' not configured.")
+
+    try:
+        text = fetch_studio_data(config)
+    except Exception as e:
+        abort(502, description=f"Failed to fetch studio data: {e}")
+
+    entries = parse_studio_data(text)
+    entries = assign_hours(entries)
+
+    hour_param = request.args.get("hour")
+    if hour_param is not None:
+        try:
+            hour_int = int(hour_param)
+        except ValueError:
+            abort(400, description="Invalid hour parameter, expected an integer.")
+        entries = [e for e in entries if e.get("hour") == hour_int]
+
+    entries = filter_entries(entries)
+
+    return jsonify({
+        "studio": studio_name.lower(),
         "entry_count": len(entries),
         "entries": entries,
     })

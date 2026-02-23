@@ -8,4 +8,7 @@ services:
       - ./media:/media:ro
     environment:
       - MEDIA_ROOT=/media
+      # Studio endpoints — add one per studio using STUDIO_<NAME>_ENDPOINT
+      - STUDIO_MAIN_ENDPOINT=http://studio:admin@192.168.1.20:8080/
+      # - STUDIO_BACKUP_ENDPOINT=http://studio:admin@192.168.1.22:8080/
     restart: unless-stopped
