@@ -129,6 +129,24 @@ def parse_playlist(filepath):
                 entry["title"] = get(1)
                 entry["category"] = get(2)
 
+                # timed_event_type (field[3])
+                try:
+                    entry["timed_event_type"] = int(get(3))
+                except (ValueError, IndexError):
+                    entry["timed_event_type"] = 0
+
+                # timed_event_minute (field[4])
+                try:
+                    entry["timed_event_minute"] = int(get(4))
+                except (ValueError, IndexError):
+                    entry["timed_event_minute"] = 0
+
+                # timed_event_second (field[5])
+                try:
+                    entry["timed_event_second"] = int(get(5))
+                except (ValueError, IndexError):
+                    entry["timed_event_second"] = 0
+
                 # type (field[6])
                 try:
                     entry["type"] = int(get(6))
@@ -142,6 +160,9 @@ def parse_playlist(filepath):
                     entry["intro"] = int(get(7))
                 except (ValueError, IndexError):
                     entry["intro"] = -1
+
+                entry["year"] = get(8)
+                entry["region"] = get(9)
 
                 # cue_time (field[10])
                 try:
@@ -161,8 +182,20 @@ def parse_playlist(filepath):
                 except (ValueError, IndexError):
                     entry["segue"] = 0
 
+                entry["other"] = get(13)
+
+                # outro (field[14])
+                try:
+                    entry["outro"] = int(get(14))
+                except (ValueError, IndexError):
+                    entry["outro"] = -1
+
+                entry["color"] = get(15)
+                entry["client"] = get(16)
+                entry["composer"] = get(17)
+
             if entry.get("type") == 3:
-                for key in ("file_path", "file_exists", "duration", "intro", "cue_time", "cue_overlap", "segue"):
+                for key in ("file_path", "file_exists", "duration", "intro", "cue_time", "cue_overlap", "segue", "outro"):
                     entry.pop(key, None)
 
             entries.append(entry)
