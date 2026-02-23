@@ -101,7 +101,7 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
       "type_label": "live_dj",
       "title": "1200 (12pm 01/01/2025)",
       "category": "Hour Marker",
-      "filename": "G:\\Playlist\\Playlists\\Jan01-12.m3u",
+      "filename": "X:\\Playlist\\Playlists\\Jan01-12.m3u",
       "file_exists": false,
       "hour": 12
     },
@@ -113,7 +113,7 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
       "title": "Some Spot Title",
       "duration": 19.1,
       "category": "<Comm Break=00>",
-      "filename": "G:\\Spots\\1234.mp3",
+      "filename": "X:\\Spots\\1234.mp3",
       "file_exists": true,
       "hour": 12
     }
