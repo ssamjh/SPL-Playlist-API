@@ -161,8 +161,11 @@ def parse_playlist(filepath):
                 except (ValueError, IndexError):
                     entry["intro"] = -1
 
-                entry["year"] = get(8)
-                entry["region"] = get(9)
+                # cue_segue_mode (field[9]): 0 = Studio calculates cue/segue, 1 = use stored %q/%Q values
+                try:
+                    entry["cue_segue_mode"] = int(get(9))
+                except (ValueError, IndexError):
+                    entry["cue_segue_mode"] = 0
 
                 # cue_time (field[10])
                 try:
@@ -192,7 +195,12 @@ def parse_playlist(filepath):
 
                 entry["color"] = get(15)
                 entry["client"] = get(16)
-                entry["composer"] = get(17)
+
+                # fade_speed (field[17]): lower = faster natural fade
+                try:
+                    entry["fade_speed"] = int(get(17))
+                except (ValueError, IndexError):
+                    entry["fade_speed"] = 0
 
             if entry.get("type") == 3:
                 for key in ("file_path", "file_exists", "duration", "intro", "cue_time", "cue_overlap", "segue", "outro"):
