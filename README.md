@@ -99,9 +99,9 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
       "index": 0,
       "type": 4,
       "type_label": "live_dj",
-      "title": "1200 (12pm 23/02/2026)",
+      "title": "1200 (12pm 01/01/2025)",
       "category": "Hour Marker",
-      "filename": "G:\\Playlist\\Playlists\\Feb23-12.m3u",
+      "filename": "G:\\Playlist\\Playlists\\Jan01-12.m3u",
       "file_exists": false,
       "hour": 12
     },
@@ -109,11 +109,11 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
       "index": 2,
       "type": 11,
       "type_label": "commercial",
-      "artist": "ADVT - Ruby",
-      "title": "Fuel 2 U Ltd",
+      "artist": "Some Advertiser",
+      "title": "Some Spot Title",
       "duration": 19.1,
       "category": "<Comm Break=00>",
-      "filename": "G:\\Spots\\5222.mp3",
+      "filename": "G:\\Spots\\1234.mp3",
       "file_exists": true,
       "hour": 12
     }
