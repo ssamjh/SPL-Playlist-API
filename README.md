@@ -250,6 +250,143 @@ All parameters can be combined freely:
 /playlist/Feb05/08?type=commercial&artist=Some Artist&exact=0
 ```
 
+---
+
+## Log endpoints
+
+SPL Studio writes a `SLog-YYMMDD.csv` file per day containing every track, spot, jingle, break note, and system event. Use the `?type=` filter to narrow results (e.g. songs only, commercials only).
+
+---
+
+### `GET /logs/<studio_name>`
+Lists all available SLog files for the studio.
+
+```
+/logs/main
+```
+
+```json
+{
+  "studio": "main",
+  "entry_count": 2,
+  "files": [
+    { "date": "260322", "filename": "SLog-260322.csv" },
+    { "date": "260323", "filename": "SLog-260323.csv" }
+  ]
+}
+```
+
+---
+
+### `GET /logs/<studio_name>/<date>`
+Returns entries from the SLog for the given date.
+
+```
+/logs/main/260323
+/logs/main/2026-03-23
+```
+
+**Accepted date formats:**
+
+| Format | Example |
+|--------|---------|
+| `YYMMDD` | `260323` |
+| `YYYY-MM-DD` | `2026-03-23` |
+
+**Example response:**
+```json
+{
+  "studio": "main",
+  "date": "260323",
+  "entry_count": 312,
+  "entries": [
+    {
+      "date": "23/03/2026",
+      "time": "00:00:40",
+      "studio": "Studio 1",
+      "type": 8,
+      "type_label": "event",
+      "message": "------------- Hour Marker -------------",
+      "detail": "0000 (12am 23/03/2026)"
+    },
+    {
+      "date": "23/03/2026",
+      "time": "00:00:57",
+      "studio": "Studio 1",
+      "type": 0,
+      "type_label": "general_track",
+      "artist": "Some Artist",
+      "title": "Some Title",
+      "duration": "04:45",
+      "category": "Music-80s",
+      "file_path": "G:\\Music\\Some Artist - Some Title.wav",
+      "album": "Some Album",
+      "year": "1985",
+      "label": "Some Label",
+      "isrc": "ABCD01234567",
+      "scheduled_time": "23/03/2026 00:00"
+    }
+  ]
+}
+```
+
+**Entry fields** (keys omitted when empty or not applicable):
+
+| Field | Description |
+|-------|-------------|
+| `date` | Date the entry was logged (`DD/MM/YYYY`) |
+| `time` | Time the entry was logged (`HH:MM:SS`) |
+| `studio` | Studio name as configured in SPL |
+| `type` | Log entry type integer (see type reference below) |
+| `type_label` | Human-readable type label |
+| `artist` | Artist name (track entries only) |
+| `title` | Track title |
+| `duration` | Duration string (`MM:SS`) |
+| `category` | SPL category |
+| `file_path` | Windows file path as logged by SPL |
+| `album` | Album name |
+| `year` | Release year |
+| `composer` | Composer |
+| `label` | Record label |
+| `isrc` | ISRC code or cart/spot number |
+| `scheduled_time` | Time the track was scheduled (`DD/MM/YYYY HH:MM`) |
+| `message` | Event description (type 8 entries only) |
+| `detail` | Additional event detail (type 8 entries only, omitted if absent) |
+
+**SLog type reference:**
+
+| Value | Label | Description |
+|-------|-------|-------------|
+| 0 | `general_track` | Songs and general audio tracks |
+| 1 | `general_spot` | Jingles, sweepers, and general spots |
+| 2 | `voice_track` | Voice tracks, voice intros and outros |
+| 3 | `break_note` | Non-audio break notes and executables |
+| 4 | `cart` | Carts |
+| 5 | `commercial` | Commercials |
+| 6 | `system` | Studio monitor, TCP connections, serial port |
+| 7 | `skipped` | Tracks skipped at the end of an hour |
+| 8 | `event` | Misc events (playlist loaded, hour markers, etc.) |
+| 9 | `error_warning` | Important warnings and errors |
+
+**Query parameters:**
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `?type=` | — | Filter by type integer or label |
+| `?artist=` | — | Match artist field |
+| `?title=` | — | Match title field |
+| `?q=` | — | Match either artist or title |
+| `?exact=` | `1` | `1` = exact (case-insensitive), `0` = substring |
+
+```
+/logs/main/260323?type=general_track
+/logs/main/260323?type=5
+/logs/main/260323?artist=Fleetwood Mac
+/logs/main/260323?q=fleetwood&exact=0
+```
+
+---
+
 ## Configuration
 
 | Environment variable | Default | Description |
@@ -257,6 +394,7 @@ All parameters can be combined freely:
 | `PLAYLIST_DIR` | `/playlists` | Path to the directory containing M3U files |
 | `MEDIA_ROOT` | `/media` | Container path that the Windows drive root is mounted at |
 | `STUDIO_<NAME>_ENDPOINT` | — | SPL HTTP endpoint URL for a studio (see below) |
+| `STUDIO_<NAME>_LOG_DIR` | — | Log directory for a studio (see below) |
 
 ### Studio endpoints
 
@@ -270,6 +408,26 @@ environment:
 
 This exposes `/studio/main` and `/studio/backup`. If no studio variables are defined the endpoint is simply unavailable — playlist routes are unaffected.
 
+### Studio log directories
+
+Add one `STUDIO_<NAME>_LOG_DIR` variable per studio pointing to the folder where SPL writes its log files. The `<NAME>` becomes the studio name used in the URL path.
+
+```yaml
+environment:
+  - STUDIO_MAIN_LOG_DIR=/logs/main
+  - STUDIO_BACKUP_LOG_DIR=/logs/backup
+```
+
+This exposes `/logs/main` and `/logs/backup`. Mount each log folder as a volume:
+
+```yaml
+volumes:
+  - /path/to/main/logs:/logs/main:ro
+  - /path/to/backup/logs:/logs/backup:ro
+```
+
+### Media root
+
 The `MEDIA_ROOT` variable is used to resolve `file_exists`. Windows paths in M3U files (e.g. `X:\Music\...`) have their drive letter stripped and are looked up under `MEDIA_ROOT`. Mount the root of your media drive to match:
 
 ```yaml
@@ -282,8 +440,9 @@ environment:
 ## Notes
 
 - Files are read on every request — no caching or database
-- `file_path` values are Windows paths as written in the M3U files (e.g. `X:\Spots\file.mp3`). These are returned as-is
+- `file_path` values are Windows paths as written in the M3U or log files. These are returned as-is
 - `file_exists` is `true` if the file at `file_path` is accessible from within the container. The Windows drive letter is stripped and the remaining path is resolved under `MEDIA_ROOT` (e.g. `X:\Music\song.wav` → `/media/Music/song.wav`)
 - `break_note` entries (type 3) omit `file_path`, `file_exists`, `duration`, `intro`, `cue_time`, `cue_overlap`, and `segue` as these fields are not applicable
 - In studio responses, `break_note` entries (type 3) omit `duration`, `intro`, `outro`, `filename`, and `file_exists`; `live_dj` entries (type 4) omit `duration`
 - Studio data is fetched live on every request — SPL must be reachable from the container at request time
+- Log files are expected to be in UTF-8 encoding as written by SPL Studio

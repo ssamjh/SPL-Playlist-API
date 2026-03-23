@@ -481,5 +481,200 @@ def studio(studio_name):
     })
 
 
+# ---------------------------------------------------------------------------
+# Logs — SLog / STrack
+# ---------------------------------------------------------------------------
+
+SLOG_TYPE_LABELS = {
+    0: "general_track",
+    1: "general_spot",
+    2: "voice_track",
+    3: "break_note",
+    4: "cart",
+    5: "commercial",
+    6: "system",
+    7: "skipped",
+    8: "event",
+    9: "error_warning",
+}
+
+SLOG_LABEL_TO_TYPE = {v: k for k, v in SLOG_TYPE_LABELS.items()}
+
+
+def load_studio_log_dirs():
+    """Discover studio log directories from STUDIO_<NAME>_LOG_DIR env vars."""
+    dirs = {}
+    for key, value in os.environ.items():
+        if key.startswith("STUDIO_") and key.endswith("_LOG_DIR"):
+            name = key[len("STUDIO_"):-len("_LOG_DIR")].lower()
+            dirs[name] = value
+    return dirs
+
+
+STUDIO_LOG_DIRS = load_studio_log_dirs()
+
+
+def parse_date_param(date_str):
+    """Convert a date string to YYMMDD. Accepts YYMMDD or YYYY-MM-DD."""
+    if re.match(r'^\d{6}$', date_str):
+        return date_str
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', date_str)
+    if m:
+        y, mo, d = m.groups()
+        return y[2:] + mo + d
+    abort(400, description=f"Invalid date '{date_str}'. Use YYMMDD or YYYY-MM-DD.")
+
+
+def find_log_file(log_dir, prefix, yymmdd):
+    """Locate SLog-YYMMDD.csv or STrack-YYMMDD.csv (case-insensitive extension)."""
+    for name in (f"{prefix}-{yymmdd}.csv", f"{prefix}-{yymmdd}.CSV"):
+        path = os.path.join(log_dir, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def list_slog_files(log_dir):
+    """Return metadata for every SLog file found in log_dir."""
+    result = []
+    pattern = os.path.join(log_dir, "SLog-*.csv")
+    for filepath in sorted(glob.glob(pattern)):
+        basename = os.path.basename(filepath)
+        m = re.match(r'^SLog-(\d{6})\.csv$', basename, re.IGNORECASE)
+        if m:
+            result.append({
+                "date": m.group(1),
+                "filename": basename,
+            })
+    return result
+
+
+# --- SLog parsing ---
+
+def parse_slog_row(row):
+    """Parse one row of an SLog CSV file.
+
+    Track/spot rows (type 0-7, 9):
+      date, time, studio, type, artist, title, duration, category, file_path,
+      [artist2], album, year, composer, [?], label, isrc, [rotation], [?], [?], scheduled_time
+
+    Event rows (type 8):
+      date, time, studio, type, message[, detail]
+    """
+    if len(row) < 5:
+        return None
+    try:
+        type_int = int(row[3])
+    except ValueError:
+        return None
+
+    entry = {
+        "date": row[0],
+        "time": row[1],
+        "studio": row[2],
+        "type": type_int,
+        "type_label": SLOG_TYPE_LABELS.get(type_int, "unknown"),
+    }
+
+    if type_int == 8:
+        entry["message"] = row[4]
+        if len(row) > 5 and row[5]:
+            entry["detail"] = row[5]
+    else:
+        def g(i):
+            return row[i] if i < len(row) else ""
+
+        if g(4):  entry["artist"]         = g(4)
+        if g(5):  entry["title"]          = g(5)
+        if g(6):  entry["duration"]       = g(6)
+        if g(7):  entry["category"]       = g(7)
+        if g(8):  entry["file_path"]      = g(8)
+        if g(10): entry["album"]          = g(10)
+        if g(11): entry["year"]           = g(11)
+        if g(12): entry["composer"]       = g(12)
+        if g(14): entry["label"]          = g(14)
+        if g(15): entry["isrc"]           = g(15)
+        if g(19): entry["scheduled_time"] = g(19)
+
+    return entry
+
+
+def parse_slog(filepath):
+    """Parse an SLog-YYMMDD.csv file into a list of entry dicts."""
+    entries = []
+    try:
+        with open(filepath, encoding="utf-8", errors="replace") as fh:
+            for row in csv.reader(fh):
+                entry = parse_slog_row(row)
+                if entry:
+                    entries.append(entry)
+    except OSError:
+        pass
+    return entries
+
+
+# --- Log entry filtering ---
+
+def filter_text_entries(entries, fields=("artist", "title")):
+    """Apply ?artist=, ?title=, ?q=, ?exact= query param filters."""
+    exact = request.args.get("exact", "1").lower() not in ("0", "false", "no")
+    for field in fields:
+        value = request.args.get(field)
+        if value is not None:
+            if exact:
+                entries = [e for e in entries if e.get(field, "").lower() == value.lower()]
+            else:
+                v = value.lower()
+                entries = [e for e in entries if v in e.get(field, "").lower()]
+    q = request.args.get("q")
+    if q is not None:
+        if exact:
+            entries = [e for e in entries if any(e.get(f, "").lower() == q.lower() for f in fields)]
+        else:
+            q_lower = q.lower()
+            entries = [e for e in entries if any(q_lower in e.get(f, "").lower() for f in fields)]
+    return entries
+
+
+def filter_slog_entries(entries):
+    """Apply ?type=, ?artist=, ?title=, ?q=, ?exact= filters for SLog entries."""
+    raw_type = request.args.get("type")
+    if raw_type is not None:
+        if raw_type.lstrip("-").isdigit():
+            type_int = int(raw_type)
+        else:
+            type_int = SLOG_LABEL_TO_TYPE.get(raw_type.lower())
+            if type_int is None:
+                abort(400, description=f"Unknown type label '{raw_type}'. Valid: {', '.join(SLOG_LABEL_TO_TYPE)}")
+        entries = [e for e in entries if e.get("type") == type_int]
+    return filter_text_entries(entries)
+
+
+# --- Log routes ---
+
+@app.route("/logs/<studio_name>")
+def logs_index(studio_name):
+    log_dir = STUDIO_LOG_DIRS.get(studio_name.lower())
+    if log_dir is None:
+        abort(404, description=f"No log directory configured for studio '{studio_name}'.")
+    files = list_slog_files(log_dir)
+    return jsonify({"studio": studio_name.lower(), "entry_count": len(files), "files": files})
+
+
+@app.route("/logs/<studio_name>/<date>")
+def logs_slog(studio_name, date):
+    log_dir = STUDIO_LOG_DIRS.get(studio_name.lower())
+    if log_dir is None:
+        abort(404, description=f"No log directory configured for studio '{studio_name}'.")
+    yymmdd = parse_date_param(date)
+    filepath = find_log_file(log_dir, "SLog", yymmdd)
+    if not filepath:
+        abort(404, description=f"No SLog found for studio '{studio_name}' on {yymmdd}.")
+    entries = parse_slog(filepath)
+    entries = filter_slog_entries(entries)
+    return jsonify({"studio": studio_name.lower(), "date": yymmdd, "entry_count": len(entries), "entries": entries})
+
+
+
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
