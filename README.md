@@ -93,6 +93,7 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
 ```json
 {
   "studio": "main",
+  "current_index": 5,
   "entry_count": 13,
   "entries": [
     {
@@ -120,6 +121,14 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
   ]
 }
 ```
+
+**Response fields:**
+
+| Field | Description |
+|-------|-------------|
+| `studio` | Studio name (lowercased) |
+| `current_index` | Index of the currently playing track (`null` if unavailable) |
+| `entry_count` | Number of entries returned |
 
 **Entry fields** (keys omitted when empty or not applicable):
 

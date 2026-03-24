@@ -347,20 +347,19 @@ def load_studio_configs():
 STUDIO_CONFIGS = load_studio_configs()
 
 
-def fetch_studio_data(endpoint_url):
-    """Fetch raw CSV text from the studio SPL endpoint, handling Basic Auth in the URL."""
+def _build_studio_request(endpoint_url, extra_query):
+    """Build an authenticated Request for a studio endpoint with the given query string appended."""
     parsed = urlparse(endpoint_url)
     username = parsed.username
     password = parsed.password
 
-    # Rebuild URL without embedded credentials
     netloc = parsed.hostname or ""
     if parsed.port:
         netloc += f":{parsed.port}"
 
     query = parsed.query or ""
-    if "TrackInfo=all" not in query:
-        query = (query + "&TrackInfo=all") if query else "TrackInfo=all"
+    if extra_query not in query:
+        query = (query + "&" + extra_query) if query else extra_query
 
     clean_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, query, parsed.fragment))
 
@@ -369,8 +368,25 @@ def fetch_studio_data(endpoint_url):
         credentials = base64.b64encode(f"{username}:{password or ''}".encode()).decode()
         req.add_header("Authorization", f"Basic {credentials}")
 
+    return req
+
+
+def fetch_studio_data(endpoint_url):
+    """Fetch raw CSV text from the studio SPL endpoint, handling Basic Auth in the URL."""
+    req = _build_studio_request(endpoint_url, "TrackInfo=all")
     with urlopen(req, timeout=10) as resp:
         return resp.read().decode("utf-8", errors="replace")
+
+
+def fetch_curr_index(endpoint_url):
+    """Fetch the current playing index from the studio SPL endpoint."""
+    req = _build_studio_request(endpoint_url, "CurrIndex")
+    with urlopen(req, timeout=10) as resp:
+        raw = resp.read().decode("utf-8", errors="replace").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def parse_studio_data(text):
@@ -461,6 +477,11 @@ def studio(studio_name):
     except Exception as e:
         abort(502, description=f"Failed to fetch studio data: {e}")
 
+    try:
+        current_index = fetch_curr_index(config)
+    except Exception:
+        current_index = None
+
     entries = parse_studio_data(text)
     entries = assign_hours(entries)
 
@@ -476,6 +497,7 @@ def studio(studio_name):
 
     return jsonify({
         "studio": studio_name.lower(),
+        "current_index": current_index,
         "entry_count": len(entries),
         "entries": entries,
     })
