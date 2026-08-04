@@ -4,6 +4,7 @@ import glob
 import io
 import os
 import re
+from functools import lru_cache
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 from flask import Flask, jsonify, abort, request
@@ -14,15 +15,92 @@ PLAYLIST_DIR = os.environ.get("PLAYLIST_DIR", "/playlists")
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
 
 
+def load_media_roots():
+    """Discover per-drive mount points from MEDIA_ROOT_<LETTER> environment variables."""
+    roots = {}
+    for key, value in os.environ.items():
+        match = re.match(r'^MEDIA_ROOT_([A-Za-z])$', key)
+        if match:
+            roots[match.group(1).upper()] = value
+    return roots
+
+
+MEDIA_ROOTS = load_media_roots()
+
+
 def resolve_path(windows_path):
-    """Translate a Windows absolute path (e.g. G:\\Spots\\1.mp3) to a container path under MEDIA_ROOT."""
+    """Translate a Windows absolute path (e.g. G:\\Spots\\1.mp3) to a local path.
+
+    The drive letter selects its mount from MEDIA_ROOT_<LETTER>, falling back to
+    MEDIA_ROOT for drives with no mapping of their own.
+    """
     if not windows_path:
+        return ""  # callers pass this straight to os.path.exists()
+    match = re.match(r'^([A-Za-z]):\\(.*)$', windows_path, re.DOTALL)
+    if match:
+        root = MEDIA_ROOTS.get(match.group(1).upper(), MEDIA_ROOT)
+        path = match.group(2)
+    else:
+        root, path = MEDIA_ROOT, windows_path
+    return os.path.join(root, path.replace('\\', '/'))
+
+APE_MAGIC = b"APETAGEX"
+APE_FOOTER_SIZE = 32
+ID3V1_SIZE = 128
+GAIN_KEY = b"REPLAYGAIN_TRACK_GAIN\x00"
+
+
+def gain_from_ape_items(items):
+    """Extract REPLAYGAIN_TRACK_GAIN in dB from an APEv2 item block, or None.
+
+    Each APEv2 item is: value size (uint32 LE), flags (uint32 LE), key, NUL, value.
+    Values written by Track Tool's Gain Scan look like "1.36 db" / "-10.01 db".
+    Only the one key is located rather than walking every item, because Studio
+    stores binary items in the same tag that make strict APEv2 parsers (mutagen
+    included) reject the whole tag on the first undecodable value.
+    """
+    index = items.upper().find(GAIN_KEY)  # bytes.upper() is length-preserving
+    if index < 8:
         return None
-    # Strip drive letter and leading backslash (e.g. "G:\")
-    path = re.sub(r'^[A-Za-z]:\\', '', windows_path)
-    # Replace backslashes with forward slashes
-    path = path.replace('\\', '/')
-    return os.path.join(MEDIA_ROOT, path)
+    size = int.from_bytes(items[index - 8:index - 4], "little")
+    value_at = index + len(GAIN_KEY)
+    match = re.search(rb'-?\d+(?:\.\d+)?', items[value_at:value_at + size])
+    return float(match.group()) if match else None
+
+
+@lru_cache(maxsize=8192)
+def read_gain(path, mtime):
+    """Read the ReplayGain value from a file's APEv2 tag. Cached on (path, mtime)."""
+    # ponytail: mtime in the cache key is the whole invalidation strategy —
+    # a re-tag that preserves mtime serves stale until restart.
+    try:
+        with open(path, "rb") as fh:
+            # The footer ends the file, unless an ID3v1 tag was appended after it.
+            for trailing in (0, ID3V1_SIZE):
+                fh.seek(-(APE_FOOTER_SIZE + trailing), os.SEEK_END)
+                footer = fh.read(APE_FOOTER_SIZE)
+                if footer[:len(APE_MAGIC)] != APE_MAGIC:
+                    continue
+                tag_size = int.from_bytes(footer[12:16], "little")  # items + footer
+                if not APE_FOOTER_SIZE < tag_size <= 1 << 20:
+                    return None
+                fh.seek(-(tag_size + trailing), os.SEEK_END)
+                return gain_from_ape_items(fh.read(tag_size - APE_FOOTER_SIZE))
+    except OSError:
+        return None
+    return None
+
+
+def replay_gain(windows_path):
+    """ReplayGain track gain in dB for a Windows path, or None if unavailable."""
+    path = resolve_path(windows_path)
+    if not path:
+        return None
+    try:
+        return read_gain(path, os.path.getmtime(path))
+    except OSError:
+        return None
+
 
 TYPE_LABELS = {
     0: "song",
@@ -219,6 +297,25 @@ LABEL_TO_TYPE = {v: k for k, v in TYPE_LABELS.items()}
 TEXT_FIELDS = ("artist", "title", "category")
 
 
+def add_replay_gain(entries):
+    """Attach replay_gain to each entry, but only when ?replay_gain=1 is passed.
+
+    Opt-in because it opens every entry's audio file to read its APEv2 tag, which
+    is far slower than the rest of a request. Runs before filter_entries() so that
+    ?sort=replay_gain works.
+    """
+    if request.args.get("replay_gain", "0").lower() in ("", "0", "false", "no"):
+        return entries
+    for entry in entries:
+        # M3U entries carry file_path, studio entries carry filename
+        path = entry.get("file_path") or entry.get("filename")
+        if path:
+            gain = replay_gain(path)
+            if gain is not None:
+                entry["replay_gain"] = gain
+    return entries
+
+
 def filter_entries(entries):
     """Apply ?type=, ?q=, and ?exact= filters from query params."""
     # --- type filter ---
@@ -309,7 +406,7 @@ def playlist_day(date):
         for entry in parse_playlist(f):
             entry["hour"] = hour
             all_entries.append(entry)
-    all_entries = filter_entries(all_entries)
+    all_entries = filter_entries(add_replay_gain(all_entries))
     return jsonify({
         "date": date,
         "entry_count": len(all_entries),
@@ -324,7 +421,7 @@ def playlist(date, hour):
         abort(404)
     entries = parse_playlist(filepath)
     d, h = parse_filename(filepath)
-    entries = filter_entries(entries)
+    entries = filter_entries(add_replay_gain(entries))
     return jsonify({
         "filename": os.path.basename(filepath),
         "date": d,
@@ -493,7 +590,7 @@ def studio(studio_name):
             abort(400, description="Invalid hour parameter, expected an integer.")
         entries = [e for e in entries if e.get("hour") == hour_int]
 
-    entries = filter_entries(entries)
+    entries = filter_entries(add_replay_gain(entries))
 
     return jsonify({
         "studio": studio_name.lower(),

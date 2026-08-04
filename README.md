@@ -74,10 +74,16 @@ Returns entries for a single hour. Accepts zero-padded or unpadded hour (`08` or
   "cue_time": 500,
   "cue_overlap": 2700,
   "segue": 19600,
+  "replay_gain": -6.35,
   "file_path": "X:\\Spots\\5222.mp3",
   "file_exists": true
 }
 ```
+
+`replay_gain` is the ReplayGain level in dB written into the audio file by Track Tool's
+Gain Scan — the gain Studio applies on playback to even out loudness between tracks. It
+appears **only when `?replay_gain=1` is passed**, since reading it opens every entry's
+file. See [ReplayGain](#replaygain).
 
 ---
 
@@ -143,6 +149,7 @@ Returns the track list currently loaded in a studio's SPL instance. The data is 
 | `duration` | Duration in seconds (omitted for `break_note` and `live_dj`) |
 | `intro` | Intro time in ms (omitted if `-1`) |
 | `outro` | Outro time in ms (omitted if `-1`) |
+| `replay_gain` | ReplayGain level in dB — only when `?replay_gain=1` is passed, and omitted if the file has no ReplayGain tag |
 | `category` | SPL category string |
 | `filename` | Windows file path as reported by SPL |
 | `file_exists` | Whether the file is accessible from within the container (omitted for `break_note`) |
@@ -158,6 +165,53 @@ Filter results to a single hour block. The hour is an integer matching the first
 ```
 
 All standard filter, search, and sort parameters also apply — see [Query parameters](#query-parameters) below.
+
+---
+
+## ReplayGain
+
+`replay_gain` is the ReplayGain track gain in dB (e.g. `-10.01`, `1.36`) that Track Tool's
+*Gain Scan* wrote into the audio file, and that Studio applies on playback to normalise
+loudness. It is available on `/playlist/<date>`, `/playlist/<date>/<hour>` and
+`/studio/<studio_name>`.
+
+### `?replay_gain=1` (opt-in — required)
+
+Reading the gain means opening every entry's audio file, so it is **off by default** and
+must be requested explicitly. Without the parameter the key is never present.
+
+```
+/playlist/Feb05/08?replay_gain=1
+/studio/main?replay_gain=1
+/playlist/Feb05?replay_gain=1&type=song&sort=replay_gain
+```
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `?replay_gain=` | `0` | `1`/`true` = read and include `replay_gain`, `0` = omit it |
+
+Values are cached per `(path, mtime)`, so the cost lands on the first request for a given
+file and later requests are cheap. Gain is read **before** filtering and sorting so
+`?sort=replay_gain` works — which also means combining it with `?type=` still reads every
+entry's file, not just the matching ones.
+
+The value is **not** in the M3U or in the SPL database — it is read from the audio file
+itself, so the drive holding the file must be mounted (see
+[Media roots](#media-roots)) for the field to appear. Details:
+
+- Track Tool stores it in an **APEv2 tag** at the end of the file, for `.wav` as well as
+  `.mp3`. Studio also writes its own binary items into that same tag, which makes strict
+  APEv2 libraries reject the whole tag — so the reader locates just the
+  `REPLAYGAIN_TRACK_GAIN` item rather than parsing every item
+- An `ID3v1` tag appended after the APEv2 footer is handled
+- The key is **omitted** when the file has no ReplayGain tag (i.e. it was never gain
+  scanned) or cannot be read. It is never reported as `0`, since 0 dB is a valid gain
+
+You can use this to find tracks that were missed by a gain scan:
+
+```
+/playlist/Feb05?replay_gain=1&type=song&sort=replay_gain
+```
 
 ---
 
@@ -401,7 +455,8 @@ Returns entries from the SLog for the given date.
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
 | `PLAYLIST_DIR` | `/playlists` | Path to the directory containing M3U files |
-| `MEDIA_ROOT` | `/media` | Container path that the Windows drive root is mounted at |
+| `MEDIA_ROOT_<LETTER>` | — | Container path that Windows drive `<LETTER>:` is mounted at |
+| `MEDIA_ROOT` | `/media` | Fallback mount for drive letters with no `MEDIA_ROOT_<LETTER>` |
 | `STUDIO_<NAME>_ENDPOINT` | — | SPL HTTP endpoint URL for a studio (see below) |
 | `STUDIO_<NAME>_LOG_DIR` | — | Log directory for a studio (see below) |
 
@@ -435,23 +490,39 @@ volumes:
   - /path/to/backup/logs:/logs/backup:ro
 ```
 
-### Media root
+### Media roots
 
-The `MEDIA_ROOT` variable is used to resolve `file_exists`. Windows paths in M3U files (e.g. `X:\Music\...`) have their drive letter stripped and are looked up under `MEDIA_ROOT`. Mount the root of your media drive to match:
+Windows paths in M3U, studio and log data (e.g. `G:\Music\...`, `H:\Archive\...`) are
+resolved to container paths in order to serve `file_exists` and `replay_gain`. The **drive
+letter** selects the mount, so each drive that appears in your paths needs one
+`MEDIA_ROOT_<LETTER>` variable and a matching volume:
 
 ```yaml
 volumes:
-  - /mnt/your-drive:/media:ro
+  - /mnt/whiti-g:/media-g:ro
+  - /mnt/whiti-h:/media-h:ro
 environment:
-  - MEDIA_ROOT=/media
+  - MEDIA_ROOT_G=/media-g
+  - MEDIA_ROOT_H=/media-h
 ```
+
+With the above, `G:\Music\song.wav` resolves to `/media-g/Music/song.wav` and
+`H:\Archive\clip.wav` to `/media-h/Archive/clip.wav`. The letter is matched
+case-insensitively.
+
+Any drive letter without its own variable falls back to `MEDIA_ROOT`. If you only have one
+media drive, `MEDIA_ROOT` alone is still enough — the per-drive variables are optional.
+
+A drive that is referenced but not mounted is not an error: those entries simply report
+`file_exists: false` and carry no `replay_gain`.
 
 ## Notes
 
 - Files are read on every request — no caching or database
 - `file_path` values are Windows paths as written in the M3U or log files. These are returned as-is
-- `file_exists` is `true` if the file at `file_path` is accessible from within the container. The Windows drive letter is stripped and the remaining path is resolved under `MEDIA_ROOT` (e.g. `X:\Music\song.wav` → `/media/Music/song.wav`)
-- `break_note` entries (type 3) omit `file_path`, `file_exists`, `duration`, `intro`, `cue_time`, `cue_overlap`, and `segue` as these fields are not applicable
+- `file_exists` is `true` if the file at `file_path` is accessible from within the container. The Windows drive letter selects its mount and the remaining path is resolved under it (e.g. `G:\Music\song.wav` → `/media-g/Music/song.wav`) — see [Media roots](#media-roots)
+- `replay_gain` is only present when `?replay_gain=1` is passed — see [ReplayGain](#replaygain)
+- `break_note` entries (type 3) omit `file_path`, `file_exists`, `duration`, `intro`, `cue_time`, `cue_overlap`, `segue`, and `replay_gain` as these fields are not applicable
 - In studio responses, `break_note` entries (type 3) omit `duration`, `intro`, `outro`, `filename`, and `file_exists`; `live_dj` entries (type 4) omit `duration`
 - Studio data is fetched live on every request — SPL must be reachable from the container at request time
 - Log files are expected to be in UTF-8 encoding as written by SPL Studio

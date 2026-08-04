@@ -1,1 +1,3 @@
 S*-*.csv
+/__pycache__
+test_replaygain.py
