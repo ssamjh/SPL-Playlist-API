@@ -21,3 +21,9 @@ services:
       - STUDIO_MAIN_LOG_DIR=/logs/main
       # - STUDIO_BACKUP_LOG_DIR=/logs/backup
     restart: unless-stopped
+    stop_grace_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
