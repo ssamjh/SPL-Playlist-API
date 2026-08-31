@@ -9,6 +9,10 @@ services:
       - /mnt/whiti-h:/media-h:ro
       - ./logs/main:/logs/main:ro
     environment:
+      # strftime pattern for the date part of M3U filenames (before the final
+      # "-<hour>"). Default "%b%d" matches Feb05-08.M3U; e.g. "%Y-%m-%d" matches
+      # 2026-02-05-08.M3U. URIs accept MmmDD regardless of what is set here.
+      - PLAYLIST_DATE_FORMAT=%b%d
       # One per Windows drive letter that appears in playlist/studio file paths
       - MEDIA_ROOT_G=/media-g
       - MEDIA_ROOT_H=/media-h

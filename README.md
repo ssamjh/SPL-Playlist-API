@@ -12,7 +12,7 @@ Place your M3U files in `./playlists/` (or adjust the volume path in `docker-com
 
 ## File naming convention
 
-Files must follow the pattern `<MonthDay>-<HH>.M3U`, e.g.:
+Files must follow the pattern `<Date>-<HH>.M3U`, e.g.:
 
 ```
 Feb05-08.M3U
@@ -21,6 +21,19 @@ Feb06-14.M3U
 ```
 
 All matching files in the mounted directory are picked up automatically.
+
+The date part is read using the [strftime](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes) pattern in `PLAYLIST_DATE_FORMAT` (default `%b%d`), so a backend writing a different format is a config change rather than a code change:
+
+| `PLAYLIST_DATE_FORMAT` | Matches |
+|------------------------|---------|
+| `%b%d` (default) | `Feb05-08.M3U` |
+| `%Y-%m-%d` | `2026-02-05-08.M3U` |
+| `%y%m%d` | `260205-08.M3U` |
+| `%d%b` | `05Feb-08.M3U` |
+
+The hour is always the final `-` separated segment, so formats containing `-` work fine.
+
+**URLs and responses always use `MmmDD`** (e.g. `Feb05`) no matter what is on disk — the API translates between the two. URLs in the configured on-disk format are also accepted. Since `MmmDD` carries no year, it resolves against the current year when the on-disk format needs one.
 
 
 ## Endpoints
@@ -455,6 +468,7 @@ Returns entries from the SLog for the given date.
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
 | `PLAYLIST_DIR` | `/playlists` | Path to the directory containing M3U files |
+| `PLAYLIST_DATE_FORMAT` | `%b%d` | strftime pattern for the date part of M3U filenames (see [File naming convention](#file-naming-convention)) |
 | `MEDIA_ROOT_<LETTER>` | — | Container path that Windows drive `<LETTER>:` is mounted at |
 | `MEDIA_ROOT` | `/media` | Fallback mount for drive letters with no `MEDIA_ROOT_<LETTER>` |
 | `STUDIO_<NAME>_ENDPOINT` | — | SPL HTTP endpoint URL for a studio (see below) |

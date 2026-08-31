@@ -4,6 +4,7 @@ import glob
 import io
 import os
 import re
+from datetime import date as date_cls, datetime
 from functools import lru_cache
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -13,6 +14,67 @@ app = Flask(__name__)
 
 PLAYLIST_DIR = os.environ.get("PLAYLIST_DIR", "/playlists")
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
+
+# strftime pattern for the date part of an M3U filename, i.e. everything before
+# the final "-<hour>". Default "%b%d" matches Feb05-08.M3U; set
+# PLAYLIST_DATE_FORMAT to suit whatever the backend writes (e.g. "%Y-%m-%d").
+PLAYLIST_DATE_FORMAT = os.environ.get("PLAYLIST_DATE_FORMAT", "%b%d")
+
+# The canonical form used in URLs and JSON responses, regardless of on-disk format.
+URI_DATE_FORMAT = "%b%d"
+
+YEAR_DIRECTIVES = ("%y", "%Y", "%G")
+
+
+def has_year(fmt):
+    return any(d in fmt for d in YEAR_DIRECTIVES)
+
+
+def parse_date_token(token, fmt):
+    """Parse a filename/URI date token with one strftime format, or return None.
+
+    Year-less formats (like the default %b%d) are anchored to the current year so
+    that they can be re-formatted into a format that does include a year.
+    """
+    try:
+        parsed = datetime.strptime(token, fmt)
+    except ValueError:
+        return None
+    if not has_year(fmt):
+        try:
+            return parsed.date().replace(year=date_cls.today().year)
+        except ValueError:  # Feb 29 in a non-leap year
+            return parsed.date().replace(year=date_cls.today().year, day=28)
+    return parsed.date()
+
+
+def resolve_date(token):
+    """Resolve a date token from a URI into a date, or None if unrecognised.
+
+    Accepts either the configured on-disk format or the canonical MmmDD form, so
+    existing MmmDD callers keep working after PLAYLIST_DATE_FORMAT changes.
+    """
+    for fmt in (PLAYLIST_DATE_FORMAT, URI_DATE_FORMAT):
+        parsed = parse_date_token(token, fmt)
+        if parsed:
+            return parsed
+    return None
+
+
+def file_date_token(token):
+    """Translate a URI date token into the on-disk spelling.
+
+    Unrecognised tokens pass through unchanged so they simply fail to match a file
+    rather than being silently rewritten.
+    """
+    parsed = resolve_date(token)
+    return parsed.strftime(PLAYLIST_DATE_FORMAT) if parsed else token
+
+
+def uri_date_token(token):
+    """Translate an on-disk date token into the canonical MmmDD form."""
+    parsed = parse_date_token(token, PLAYLIST_DATE_FORMAT)
+    return parsed.strftime(URI_DATE_FORMAT) if parsed else token
 
 
 def load_media_roots():
@@ -118,12 +180,18 @@ TYPE_LABELS = {
 
 
 def parse_filename(filename):
-    """Parse 'Feb05-08.M3U' → ('Feb05', '08')"""
+    """Parse 'Feb05-08.M3U' → ('Feb05', '08'), honouring PLAYLIST_DATE_FORMAT.
+
+    The hour is the final "-" separated segment, so date formats containing "-"
+    (e.g. %Y-%m-%d) split correctly. The date is returned in canonical MmmDD form.
+    """
     base = os.path.splitext(os.path.basename(filename))[0]
-    match = re.match(r'^([A-Za-z]+\d+)-(\d+)$', base)
-    if match:
-        return match.group(1), match.group(2)
-    return None, None
+    date_part, sep, hour = base.rpartition("-")
+    if not sep or not hour.isdigit():
+        return None, None
+    if parse_date_token(date_part, PLAYLIST_DATE_FORMAT) is None:
+        return None, None
+    return uri_date_token(date_part), hour
 
 
 def get_playlists():
@@ -377,6 +445,7 @@ def filter_entries(entries):
 
 def find_playlist_file(date, hour):
     """Find the M3U file matching the given date and hour (e.g. 'Feb05', '8' or '08')."""
+    date = file_date_token(date)
     hour_padded = hour.zfill(2)
     pattern = os.path.join(PLAYLIST_DIR, f"{date}-{hour_padded}.M3U")
     matches = glob.glob(pattern)
@@ -396,7 +465,7 @@ def index():
 
 @app.route("/playlist/<date>")
 def playlist_day(date):
-    pattern = os.path.join(PLAYLIST_DIR, f"{date}-*.M3U")
+    pattern = os.path.join(PLAYLIST_DIR, f"{file_date_token(date)}-*.M3U")
     files = sorted(glob.glob(pattern))
     if not files:
         abort(404)
@@ -408,7 +477,7 @@ def playlist_day(date):
             all_entries.append(entry)
     all_entries = filter_entries(add_replay_gain(all_entries))
     return jsonify({
-        "date": date,
+        "date": uri_date_token(file_date_token(date)),
         "entry_count": len(all_entries),
         "entries": all_entries,
     })
