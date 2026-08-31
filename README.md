@@ -30,10 +30,40 @@ The date part is read using the [strftime](https://docs.python.org/3/library/dat
 | `%Y-%m-%d` | `2026-02-05-08.M3U` |
 | `%y%m%d` | `260205-08.M3U` |
 | `%d%b` | `05Feb-08.M3U` |
+| `%m-%d` | `09-01-01.M3U` |
 
 The hour is always the final `-` separated segment, so formats containing `-` work fine.
 
 **URLs and responses always use `MmmDD`** (e.g. `Feb05`) no matter what is on disk — the API translates between the two. URLs in the configured on-disk format are also accepted. Since `MmmDD` carries no year, it resolves against the current year when the on-disk format needs one.
+
+### Worked example: `09-01-01.M3U` (1am, 1 September)
+
+```yaml
+environment:
+  - PLAYLIST_DATE_FORMAT=%m-%d
+```
+
+The hour is the last `-` segment, so `09-01-01` splits into date `09-01` and hour `01`. Note the hour is a separate path segment in the URL — `/playlist/09-01/01`, not `/playlist/09-01-01`.
+
+| URL | |
+|-----|---|
+| `/playlist/09-01/01` | Single hour |
+| `/playlist/09-01/1` | Same file — unpadded hour |
+| `/playlist/Sep01/1` | Same file — canonical `MmmDD` |
+| `/playlist/09-01` or `/playlist/Sep01` | Whole day |
+
+`GET /` reports it as:
+
+```json
+{
+  "filename": "09-01-01.M3U",
+  "date": "Sep01",
+  "hour": "01",
+  "url": "/playlist/Sep01/01"
+}
+```
+
+If your `09-01` is day-month (1 September written `DD-MM`) rather than month-day, use `%d-%m` instead. Both match this particular file, but they diverge on any day past the 12th.
 
 
 ## Endpoints
