@@ -10,6 +10,16 @@ docker compose up -d
 
 Place your M3U files in `./playlists/` (or adjust the volume path in `docker-compose.yaml`).
 
+### Running without Docker
+
+Python is managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`, Python 3.14). Point `PLAYLIST_DIR` at your playlist folder, then:
+
+```bash
+PLAYLIST_DIR=./playlists uv run server.py
+```
+
+uv creates `.venv` and installs the locked dependencies on first run. Use `uv add` / `uv remove` to change dependencies and commit the updated `uv.lock`; the Docker image installs from the same lockfile.
+
 ## File naming convention
 
 Files must follow the pattern `<Date>-<HH>.M3U`, e.g.:
